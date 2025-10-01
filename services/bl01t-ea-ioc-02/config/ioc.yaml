@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=/epics/ibek-defs/ioc.schema.json
+
+ioc_name: "{{ _global.get_env('IOC_NAME') }}"
+
+description: Example slsDetector IOC
+
+entities:
+  - type: autosave.Autosave
+    settings_req_period: 10
+    P: "BL01T-DI-CAM-01:"
+
+  - type: devIocStats.iocAdminSoft
+    IOC: "{{ ioc_name | upper }}"
+
+  - type: slsDetector.slsDetectorConfigure
+    PORT: MYTHEN3.DET
+    P: BL01T-EA-DET-01
+    R: ":DET:"
+    ADDR: 0
+    TIMEOUT: 10
+    # TODO, we need a dummy config file that doesn't try to connect to the actual detector...
+    configFile: "/dev/null"
+    detectorIndex: 0
+    numModules: 28
+    BUFFERS: 50
+    MEMORY: 0
+
+  - type: ADCore.NDStdArrays
+    ADDR: 0
+    FTVL: "FLOAT"
+    NDARRAY_ADDR: 0
+    NDARRAY_PORT: "MYTHEN3.DET"
+    NELEMENTS: 23040
+    P: "BL01T-EA-DET-01"
+    PORT: "MYTHEN3.ARR"
+    R: ":ARR:"
+    TIMEOUT: 1
+    TYPE: "Float32"
+
+  - type: ADCore.NDFileHDF5
+    ADDR: 0
+    NDARRAY_PORT: "MYTHEN3.DET"
+    P: "BL01T-EA-DET-01"
+    PORT: "MYTHEN3.HDF"
+    QUEUE: 16
+    R: ":HDF:"
+    TIMEOUT: 1
+
+
+  - type: epics.PostStartupCommand
+    command: |
+      dbpf BL01T-DI-CAM-01:DET:DataType UInt32
+      dbpf BL01T-DI-CAM-01:HDF:EnableCallbacks 1
+      dbpf BL01T-DI-CAM-01:ARR:EnableCallbacks 1
+      dbpf BL01T-DI-CAM-01:HDF:LazyOpen Yes
+      dbpf BL01T-DI-CAM-01:DET:BitDepth 32
