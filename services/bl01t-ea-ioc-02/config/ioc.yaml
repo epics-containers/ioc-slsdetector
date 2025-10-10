@@ -18,12 +18,13 @@ entities:
     R: ":DET:"
     ADDR: 0
     TIMEOUT: 10
-    configFile: "/dls_sw/i11/software/mythen/mythen3.config"
+    # TODO, we need a dummy config file that doesn't try to connect to the actual detector...
+    # configFile: "/dls_sw/i11/software/mythen/mythen3.config"
+    configFile: "/epics/generic-source/ibek-support/slsDetector/dummy.config"
     detectorIndex: 0
     numModules: 28
     BUFFERS: 50
     MEMORY: 0
-
 
   # - type: epics.PostStartupCommand
   #   command: |
