@@ -73,7 +73,10 @@
         // this is where the ibek-support and ioc folders reside in the container build
         // in this way the devcontainer and runtime look very similar
         "source=${localWorkspaceFolder},target=/epics/generic-source,type=bind",
+        // mount the i11-services folder so we can use it from inside the container
         "source=${localWorkspaceFolder}/../../I11/i11-services,target=/workspaces/i11-services,type=bind",
+        // mount the /dls_swi11 folder so we can use it from inside the container
+        "source=/dls_sw/i11,target=/dls_sw/i11,type=bind,readonly",
         // Mount the opi folder so we can use phoebus from outside the container
         "source=${localWorkspaceFolder}/opi/auto-generated,target=/epics/opi,type=bind", //
         // Mount in the user terminal config folder so it can be edited
