@@ -65,5 +65,11 @@ COPY --from=runtime_prep /assets /
 # install runtime system dependencies, collected from install.sh scripts
 RUN ibek support apt-install-runtime-packages
 
+# HDF5 C++ runtime required by slsMultiReceiver
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libhdf5-cpp-103-1t64 && \
+    rm -rf /var/lib/apt/lists/*
+
 # launch the startup script with stdio-expose to allow console connections
 CMD ["bash", "-c", "${IOC}/start.sh"]
