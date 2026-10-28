@@ -53,7 +53,8 @@ FROM developer AS runtime_prep
 
 # get the products from the build stage and reduce to runtime assets only
 # TODO /python is created by uv - add to apt-install-runtime-packages' defaults
-RUN ibek ioc extract-runtime-assets /assets /python
+# Include SLS multi-receiver startup script as an extra runtime asset
+RUN ibek ioc extract-runtime-assets /assets /python /epics/scripts/start_sls_receiver.sh
 
 ##### runtime stage ############################################################
 FROM ${RUNTIME} AS runtime
