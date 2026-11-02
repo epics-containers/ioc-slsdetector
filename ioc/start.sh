@@ -173,6 +173,12 @@ else
     "
 fi
 
+
+# Wait for SLS receiver *******************************************************
+
+python3 /epics/ioc/scripts/checkReceiverPorts.py
+
+
 # Launch the IOC ***************************************************************
 
 if [[ ${EPICS_TARGET_ARCH} == "linux-x86_64" ]] ; then
