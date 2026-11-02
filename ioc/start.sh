@@ -1,195 +1,124 @@
 #!/bin/bash
 
-description='
+# parse arguments *************************************************************
 
- The epics-containers IOC Startup Script
- =======================================
+# --test: generate all runtime assets, but skip hardware access and the IOC
+# launch. Used by CI to validate configs. All arguments, including --test,
+# are also forwarded unchanged to a config override start.sh (see below) if
+# one exists, for it to interpret itself.
+TEST_MODE=false
+[[ "$1" == "--test" ]] && TEST_MODE=true
 
- This script is used to start an EPICS IOC in a Kubernetes pod. Implementers
- of generic IOCs are free to replace this script with their own. But
- this script as is should work for most IOCs.
+# wrap the console *************************************************************
+# test mode is not wrapped: stdio-socket takes a single command with no
+# arguments and always exits 0, so a wrapped --test could never fail.
 
- When a generic IOC runs in a kubernetes pod it is expected to have
- a config folder that defines the IOC instance.
- The helm chart for the generic IOC will mount the config folder
- as a configMap and this turns a generic IOC into a specific IOC instance.
+# stdio-socket runs the wrapped command as one string via `sh -c`, so the
+# arguments are passed as "$*": arguments containing spaces are not supported.
+if [[ -n ${KUBERNETES_PORT} && -z ${STDIO_EXPOSED} && "${TEST_MODE}" != "true" ]]; then
+    STDIO_EXPOSED=YES exec stdio-socket "${IOC}/start.sh $*"
+    exit 0
+fi
 
- Here we support the following set of options for the contents of
- the config folder:
+# error reporting **************************************************************
 
- 1. start.sh ******************************************************************
-    If the config folder contains a start.sh script it will be executed.
-    This allows the instance implementer to provide a completely custom
-    startup script. Any other files that the script needs can also be placed
-    in the config folder.
+function ibek_error {
+    echo "Error on line $BASH_LINENO: $BASH_COMMAND (exit code: $?)"
 
-    The presence of this file overrides all other options.
+    # Wait for a bit so the container does not exit and restart continually
+    sleep 10
+    exit 1
+}
 
-    WARNING: config maps are restricted to 1MB total.
-
- 2. ioc.yaml *************************************************************
-    If the config folder contains a yaml file we invoke the ibek tool to
-    generate the startup script and database. Then launch with the generated
-    startup script. The file name should always be 'ioc.yaml'. The ioc instance
-    can determine its own name with the following as the first line in 'ioc.yaml'
-
-        ioc_name: ""{{ _global.get_env('IOC_NAME') }}""
-
-    at the top of the file and in turn "{{ ioc_name }}"" can be used in any
-    of the fields within the file. For example: by default Kubernetes will be
-    looking at the iocStats PV IOC_NAME:Uptime to validate health of the IOC,
-    therefore most IOC instances should include:
-
-        entities:
-        - type: epics.EpicsEnvSet
-            name: EPICS_TZ
-            value: "GMT0BST"
-
-        - type: devIocStats.iocAdminSoft
-            IOC: "{{ ioc_name | upper }}"
-
- 3. st.cmd + ioc.subst *********************************************************
-    If the config folder contains a st.cmd script and a ioc.subst file then
-    optionally generate ioc.db from the ioc.subst file and use the st.cmd script
-    as the IOC startup script. Note that the expanded database file will
-    be generated in ${RUNTIME_DIR}/ioc.db
-
- 4. empty config folder *******************************************************
-    If the config folder is empty this message will be displayed.
-
- RTEMS IOCS - RTEMS IOC startup files can be generated using any of the above.
-
- For RTEMS we do not execute the ioc inside of the pod. Instead we:
-  - copy the IOC directory to the RTEMS mount point
-  - send a reboot command to the RTEMS crate
-  - start a telnet session to the RTEMS IOC console and connect that to
-    stdio of the pod.
-
-'
+trap ibek_error ERR
 
 # log commands and stop on errors
 set -xe
 
-# wrap this script in stdio-expose if running in Kubernetes
-# this allows the IOC to expose its console on a Unix socket
-if [[ -n ${KUBERNETES_PORT} && -z ${STDIO_EXPOSED} ]]; then
-    STDIO_EXPOSED=YES stdio-expose ${IOC}/start.sh
-    exit 0
-fi
-
-
-# error reporting *************************************************************
-
-function ibek_error {
-    echo "${1}"
-
-    # Wait for a bit so the container does not exit and restart continually
-    sleep 120
-}
-
 # environment setup ************************************************************
 
-
 cd ${IOC}
-CONFIG_DIR=${IOC}/config
+
+export CONFIG_DIR=${IOC}/config
+export RUNTIME_DIR=${EPICS_ROOT}/runtime
+mkdir -p ${RUNTIME_DIR}
 
 # add module paths to environment for use in ioc startup script
 if [[ -f ${SUPPORT}/configure/RELEASE.shell ]]; then
     source ${SUPPORT}/configure/RELEASE.shell
 fi
 
-# override startup script
-override=${CONFIG_DIR}/start.sh
-# source YAML for IOC Builder for EPICS on Kubernetes (ibek)
-ibek_yamls=(${CONFIG_DIR}/*.yaml)
-# Startup script for EPICS IOC generated by ibek
-ioc_startup=${CONFIG_DIR}/st.cmd
-
-# folder for runtime assets
-export RUNTIME_DIR=${EPICS_ROOT}/runtime
-mkdir -p ${RUNTIME_DIR}
-
-# expanded database file
-epics_db=${RUNTIME_DIR}/ioc.db
-
-# in case there are multiple YAML, pick the first one in the glob
-ibek_src=${ibek_yamls[0]}
-
-if [ -d ${CONFIG_DIR} ]; then
-    echo "checking config folder ${CONFIG_DIR}"
-    ls -al ${CONFIG_DIR}
-else
-    echo "ERROR: No config folder found."
-    ibek_error "${description}"
+# report what this image was built from (support module / python versions)
+if [[ -f /epics/versions.json ]]; then
+    cat /epics/versions.json
 fi
 
-# 1. start.sh override script **************************************************
-if [ -f ${override} ]; then
-    exec bash ${override}
-# 2. ioc.yaml ******************************************************************
-elif [ -f ${ibek_src} ]; then
+# check for an override start.sh script ****************************************
+# this script's arguments are passed on unchanged, for the override to
+# interpret itself.
 
-    if [[ ${#ibek_yamls[@]} > 1 ]]; then
-        ibek_error "ERROR: Multiple YAML files found in ${CONFIG_DIR}."
+if [ -f ${CONFIG_DIR}/start.sh ]; then
+    exec bash "${CONFIG_DIR}/start.sh" "$@"
+fi
+
+# copy hand coded files to runtime folder **************************************
+
+for f in ioc.db ioc.subst st.cmd; do
+    if [ -f ${CONFIG_DIR}/${f} ]; then
+        cp ${CONFIG_DIR}/${f} ${RUNTIME_DIR}/
     fi
+done
 
-    # Database generation script generated by ibek
-    db_src=${RUNTIME_DIR}/ioc.subst
-    final_ioc_startup=${RUNTIME_DIR}/st.cmd
 
-    # get the ibek support yaml files this ioc's support modules
-    defs=/epics/ibek-defs/*.ibek.support.yaml
-    # prepare the runtime assets: ioc.db, st.cmd + protocol, autosave files
-    ibek runtime generate ${ibek_src} ${defs}
+# generate EPICS runtime assets ************************************************
+
+if [[ -f ${CONFIG_DIR}/ioc.yaml ]] ; then
+    ibek runtime generate2 ${CONFIG_DIR}
     ibek runtime generate-autosave
-    if [[ -d /epics/support/configure/protocol ]] ; then
-        rm -fr ${RUNTIME_DIR}/protocol
-        cp -r /epics/support/configure/protocol  ${RUNTIME_DIR}
-    fi
+fi
 
-    # build expanded database using msi
-    if [ -f ${db_src} ]; then
-        includes=$(for i in ${SUPPORT}/*/db; do echo -n "-I $i "; done)
-        bash -c "msi -o${epics_db} ${includes} -I${RUNTIME_DIR} -S${db_src}"
-    fi
+# build expanded database using msi ********************************************
+# the instance config folder is on the include path so that runtime-support
+# patterns can supply their own .template / .db files alongside ioc.yaml.
+if [ -f ${RUNTIME_DIR}/ioc.subst ]; then
+    includes=$(for i in ${CONFIG_DIR} ${SUPPORT}/*/db; do echo -n "-I $i "; done)
+    bash -c "msi -o${RUNTIME_DIR}/ioc.db ${includes} -I${RUNTIME_DIR} -S${RUNTIME_DIR}/ioc.subst"
+fi
 
-# 3. st.cmd + ioc.subst ************************************************
-elif [ -f ${ioc_startup} ] ; then
+# copy any streamDevice protocol files to runtime folder ***********************
+# (must run AFTER `ibek runtime generate2`, which rmtrees ${RUNTIME_DIR})
+if [[ -d /epics/support/configure/protocol ]] ; then
+    rm -fr ${RUNTIME_DIR}/protocol
+    cp -r /epics/support/configure/protocol  ${RUNTIME_DIR}
+fi
 
-    if [ -f ${CONFIG_DIR}/ioc.subst ]; then
-        # generate ioc.db from ioc.subst, including all templates from SUPPORT
-        includes=$(for i in ${SUPPORT}/*/db; do echo -n "-I $i "; done)
-        msi ${includes} -I${RUNTIME_DIR} -S ${CONFIG_DIR}/ioc.subst -o ${epics_db}
-        ibek runtime generate-autosave
-    fi
-    final_ioc_startup=${ioc_startup}
-# 4. incorrect config folder ***************************************************
+# place runtime artifacts declared in the instance config folder **************
+# proto/db files vendored or dropped into config/ (e.g. by `ibek pattern add`)
+# are copied into their runtime search-path locations. Runs after the support
+# protocol copy above so instance files are added alongside, not wiped. This
+# replaces the per-image start.sh fork (epics-containers/ioc-streamdevice#1).
+if [[ -f ${CONFIG_DIR}/ioc.yaml ]] ; then
+    ibek runtime place-files ${CONFIG_DIR}
+fi
+
+# check hardware communication pre-requisites **********************************
+# set IBEK_DO_WAIT_DISABLE=true to skip this step (e.g. to force IOC startup
+# without waiting for hardware, or to bypass it at the shell level in pipelines
+# where ibek is unavailable)
+# 'ibek ioc do-wait' writes /tmp/doWait_completed.txt when it finishes, and
+# startup.sh waits for that file when it is used as the startup probe
+# (ioc-instance startupExecutable). When do-wait is skipped, write the file
+# here so the probe does not wait for ever.
+if [[ -f ${CONFIG_DIR}/ioc.yaml && "${IBEK_DO_WAIT_DISABLE}" != "true" && "${TEST_MODE}" != "true" ]]; then
+    ibek ioc do-wait
 else
-    ibek_error "
-    ${description}
-
-    ERROR: No IOC Instance Startup Assets found in ${CONFIG_DIR}
-    Please add ioc.yaml to the config folder (or see above for other options).
-    "
+    touch /tmp/doWait_completed.txt
 fi
 
 # Launch the IOC ***************************************************************
 
-if [[ ${EPICS_TARGET_ARCH} == "linux-x86_64" ]] ; then
-    # Execute the IOC binary and pass the startup script as an argument
-    exec ${IOC}/bin/linux-x86_64/ioc ${final_ioc_startup}
+if [[ "${TEST_MODE}" == "true" ]]; then
+    echo "Test mode: all runtime assets generated successfully, skipping IOC binary launch"
 else
-    # for not native architectures use the appropriate python package
-    if [[ -f ${CONFIG_DIR}/proxy-start.sh ]]; then
-        # instances can provide proxy-start.sh to override default behavior
-        bash ${CONFIG_DIR}/proxy-start.sh
-    else
-        # the RTEMS container provides a python package to:
-        # - copy binaries to the IOC's shared folder
-        # - remotely launch the IOC
-        # - can also remotely configure the boot parameters
-        rtems-proxy start
-    fi
+    "${IOC}/bin/${EPICS_HOST_ARCH}/ioc" "${RUNTIME_DIR}/st.cmd"
 fi
-
-
