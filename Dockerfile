@@ -1,9 +1,6 @@
-ARG IMAGE_EXT
-
-ARG BASE=7.0.9ec4
 ARG REGISTRY=ghcr.io/epics-containers
-ARG RUNTIME=${REGISTRY}/epics-base${IMAGE_EXT}-runtime:${BASE}
-ARG DEVELOPER=${REGISTRY}/epics-base${IMAGE_EXT}-developer:${BASE}
+ARG RUNTIME=${REGISTRY}/epics-base-runtime:7.0.10ec4-beta.2
+ARG DEVELOPER=${REGISTRY}/epics-base-developer:7.0.10ec4-beta.2
 
 ##### build stage ##############################################################
 FROM  ${DEVELOPER} AS developer
@@ -48,12 +45,19 @@ RUN ansible.sh slsDetector
 COPY ioc ${SOURCE_FOLDER}/ioc
 RUN ansible.sh ioc
 
+# generate a manifest of installed EPICS modules and python packages
+# IOC_VERSION is declared here, not earlier: every RUN after an ARG sees it,
+# so a new value (each branch or tag) would rebuild all the steps above
+ARG IOC_VERSION=unknown
+COPY scripts/generate_manifest.py /tmp/generate_manifest.py
+RUN python3 /tmp/generate_manifest.py "${IOC_VERSION}"
+
 ##### runtime preparation stage ################################################
 FROM developer AS runtime_prep
 
 # get the products from the build stage and reduce to runtime assets only
 # TODO /python is created by uv - add to apt-install-runtime-packages' defaults
-RUN ibek ioc extract-runtime-assets /assets /python
+RUN ibek ioc extract-runtime-assets /assets /python /epics/versions.json
 
 ##### runtime stage ############################################################
 FROM ${RUNTIME} AS runtime
