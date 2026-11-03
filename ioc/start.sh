@@ -176,7 +176,7 @@ fi
 
 # Wait for SLS receiver *******************************************************
 
-python3 /epics/ioc/scripts/checkReceiverPorts.py
+python /epics/ioc/scripts/checkReceiverPorts.py --config "${ibek_src}"
 
 
 # Launch the IOC ***************************************************************
